@@ -1,0 +1,288 @@
+# 用户 API 完整测试套件
+name: 用户管理 API 测试
+description: 测试用户相关的所有 API 接口，包括 CRUD 操作、认证等
+tags:
+  - user
+  - api
+  - regression
+
+variables:
+  test_username: "test_user_{{timestamp}}"
+  test_email: "test_{{timestamp}}@example.com"
+  test_password: "SecurePass123!"
+
+steps:
+  # ============================================
+  # 1. 用户认证流程
+  # ============================================
+  
+  # 1.1 用户注册
+  - name: 注册新用户
+    method: POST
+    url: /auth/register
+    json:
+      username: "${test_username}"
+      email: "${test_email}"
+      password: "${test_password}"
+      confirm_password: "${test_password}"
+    expected_status_code: 201
+    assertions:
+      - type: status_code
+        expected: 201
+        message: "注册接口应返回 201"
+      - type: eq
+        actual_path: code
+        expected: 0
+        message: "业务状态码应为 0（成功）"
+      - type: eq
+        actual_path: message
+        expected: "注册成功"
+        message: "提示信息应正确"
+      - type: not_empty
+        actual_path: data
+        message: "返回数据不应为空"
+    extracts:
+      - name: user_id
+        expression: data.id
+        from_response: body
+      - name: auth_token
+        expression: data.token
+        from_response: body
+  
+  # 1.2 使用错误信息注册（验证参数校验）
+  - name: 注册-缺少必填字段
+    method: POST
+    url: /auth/register
+    json:
+      username: "bad_user"
+    expected_status_code: 400
+    assertions:
+      - type: status_code
+        expected: 400
+        message: "缺少字段应返回 400"
+  
+  # 1.3 用户登录
+  - name: 用户登录
+    method: POST
+    url: /auth/login
+    json:
+      username: "${test_username}"
+      password: "${test_password}"
+    expected_status_code: 200
+    assertions:
+      - type: status_code
+        expected: 200
+      - type: eq
+        actual_path: code
+        expected: 0
+      - type: not_empty
+        actual_path: data.token
+        message: "应返回认证 Token"
+    extracts:
+      - name: access_token
+        expression: data.token
+        from_response: body
+  
+  # 1.4 错误密码登录
+  - name: 登录-密码错误
+    method: POST
+    url: /auth/login
+    json:
+      username: "${test_username}"
+      password: "wrong_password"
+    expected_status_code: 401
+    assertions:
+      - type: status_code
+        expected: 401
+        message: "错误密码应返回 401"
+  
+  # ============================================
+  # 2. 用户信息管理 (需要认证)
+  # ============================================
+  
+  # 2.1 获取当前用户信息
+  - name: 获取用户信息
+    method: GET
+    url: /user/profile
+    headers:
+      Authorization: "Bearer ${access_token}"
+    expected_status_code: 200
+    assertions:
+      - type: status_code
+        expected: 200
+      - type: eq
+        actual_path: data.username
+        expected: "${test_username}"
+        message: "返回的用户名应与注册时一致"
+      - type: eq
+        actual_path: data.email
+        expected: "${test_email}"
+        message: "返回的邮箱应一致"
+      - type: contains
+        actual_path: data.email
+        expected: "@example.com"
+        message: "邮箱格式应包含域名"
+  
+  # 2.2 更新用户信息
+  - name: 更新用户信息
+    method: PUT
+    url: /user/profile
+    headers:
+      Authorization: "Bearer ${access_token}"
+    json:
+      nickname: "Updated Nickname"
+      avatar: "https://example.com/avatar.jpg"
+    expected_status_code: 200
+    assertions:
+      - type: status_code
+        expected: 200
+      - type: eq
+        actual_path: code
+        expected: 0
+      - type: eq
+        actual_path: data.nickname
+        expected: "Updated Nickname"
+        message: "昵称更新成功"
+  
+  # 2.3 验证更新后的信息
+  - name: 验证更新结果
+    method: GET
+    url: /user/profile
+    headers:
+      Authorization: "Bearer ${access_token}"
+    expected_status_code: 200
+    assertions:
+      - type: status_code
+        expected: 200
+      - type: eq
+        actual_path: data.nickname
+        expected: "Updated Nickname"
+        message: "昵称已成功更新"
+  
+  # ============================================
+  # 3. 用户列表查询 (管理员权限)
+  # ============================================
+  
+  # 3.1 查询用户列表
+  - name: 查询用户列表
+    method: GET
+    url: /users
+    params:
+      page: 1
+      size: 10
+    headers:
+      Authorization: "Bearer ${access_token}"
+    expected_status_code: 200
+    assertions:
+      - type: status_code
+        expected: 200
+      - type: length_gt
+        actual_path: data.items
+        expected: 0
+        message: "用户列表不应为空"
+      - type: type_is
+        actual_path: data.total
+        expected: int
+        message: "总数应为整数类型"
+    extracts:
+      - name: total_users
+        expression: data.total
+        from_response: body
+  
+  # 3.2 分页查询
+  - name: 分页查询-第二页
+    method: GET
+    url: /users
+    params:
+      page: 2
+      size: 5
+    headers:
+      Authorization: "Bearer ${access_token}"
+    expected_status_code: 200
+    assertions:
+      - type: status_code
+        expected: 200
+      - type: lte
+        actual_path: data.items.length
+        expected: 5
+        message: "每页数量不超过 size 参数"
+  
+  # 3.3 搜索用户
+  - name: 搜索用户
+    method: GET
+    url: /users/search
+    params:
+      keyword: "${test_username}"
+    headers:
+      Authorization: "Bearer ${access_token}"
+    expected_status_code: 200
+    assertions:
+      - type: status_code
+        expected: 200
+      - type: gt
+        actual_path: data.length
+        expected: 0
+        message: "搜索结果应包含刚创建的用户"
+  
+  # ============================================
+  # 4. 密码修改
+  # ============================================
+  
+  - name: 修改密码
+    method: PUT
+    url: /user/password
+    headers:
+      Authorization: "Bearer ${access_token}"
+    json:
+      old_password: "${test_password}"
+      new_password: "NewSecurePass456!"
+      confirm_password: "NewSecurePass456!"
+    expected_status_code: 200
+    assertions:
+      - type: status_code
+        expected: 200
+      - type: eq
+        actual_path: message
+        expected: "密码修改成功"
+  
+  # 用新密码重新登录验证
+  - name: 新密码登录验证
+    method: POST
+    url: /auth/login
+    json:
+      username: "${test_username}"
+      password: "NewSecurePass456!"
+    expected_status_code: 200
+    assertions:
+      - type: status_code
+        expected: 200
+      - type: not_empty
+        actual_path: data.token
+    extracts:
+      - name: access_token
+        expression: data.token
+        from_response: body
+  
+  # ============================================
+  # 5. 未授权访问测试
+  # ============================================
+  
+  - name: 未授权访问-无 Token
+    method: GET
+    url: /user/profile
+    expected_status_code: 401
+    assertions:
+      - type: status_code
+        expected: 401
+        message: "未携带 Token 应返回 401"
+  
+  - name: 未授权访问-无效 Token
+    method: GET
+    url: /user/profile
+    headers:
+      Authorization: "Bearer invalid_token_here"
+    expected_status_code: 401
+    assertions:
+      - type: status_code
+        expected: 401
+        message: "无效 Token 应返回 401"
